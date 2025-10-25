@@ -87,7 +87,7 @@ Starts HTTP server for programmatic access to claudy.
 ## Session Behavior
 
 - **Auto-creation**: Sessions are created automatically on first `call`
-- **TTL cleanup**: Sessions auto-cleanup after 2 hours of inactivity
+- **TTL cleanup**: Sessions auto-cleanup after 20 minutes of inactivity
 - **In-memory**: Sessions reset when server restarts
 - **Context preservation**: Each session remembers full conversation history
 

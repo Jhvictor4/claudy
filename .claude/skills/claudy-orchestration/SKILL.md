@@ -5,321 +5,268 @@ description: Use this skill when delegating to sub-agents that require more flex
 
 # Claudy Orchestration
 
-## Overview
-
-Claudy is a multi-agent orchestration tool built on claude-agent-sdk. Use it to spawn and manage persistent Claude agent sessions via CLI commands.
-
-## When to Use Claudy vs Task Tool
-
-**Use the Task tool (default) when:**
-- Launching a single specialized agent (code-reviewer, Explore, etc.)
-- Agent types are predefined and well-suited to the task
-- No need for session persistence or cross-call context
-
-**Use Claudy (this skill) when:**
-- Launching multiple agents in parallel with custom workflows
-- Need persistent sessions that remember context across multiple calls
-- Require fine-grained control over agent lifecycle (create, fork, cleanup)
-- Building complex orchestration patterns not supported by Task tool
-- Delegating to agents with undefined or custom roles
-
-**Example scenarios for Claudy:**
-- "Launch 5 agents to analyze different aspects of the codebase in parallel"
-- "Create a research agent, have it gather info, then fork it to explore 3 different approaches"
-- "Delegate long-running analysis to background agents and aggregate results later"
+Multi-agent session manager for Claude Code. Spawn and manage persistent Claude agent sessions with automatic cleanup.
 
 ## Quick Start
 
-Claudy runs via `uvx` without installation. All commands use the pattern:
+### Installation
 
-```bash
-uvx claudy <command> [arguments]
+Add to your `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "claudy": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/kangjihyeok/claude-agentic-skills.git@main#subdirectory=claudy",
+        "fastmcp",
+        "run",
+        "claudy.mcp_server:mcp"
+      ]
+    }
+  }
+}
 ```
 
-Basic workflow:
+### CLI Usage
 
 ```bash
-# 1. Create and call an agent
-uvx claudy call researcher "Search for latest AI papers"
+# Start the server (required first step)
+uvx claudy server start
 
-# 2. Continue conversation (context preserved)
-uvx claudy call researcher "Summarize the top 3 papers"
-
-# 3. Check status
-uvx claudy status researcher
-
-# 4. Cleanup when done
-uvx claudy cleanup researcher
-```
-
-## Basic Operations
-
-### Creating and Calling Agents
-
-Use `call` to send messages to agents. Sessions auto-create if they don't exist:
-
-```bash
+# Call an agent session
 uvx claudy call <name> "<message>" [--verbosity quiet|normal|verbose]
-```
 
-**Example:**
-```bash
-# Create new agent
-uvx claudy call security "Audit auth.py for vulnerabilities"
-
-# Continue conversation
-uvx claudy call security "Focus on SQL injection risks"
-```
-
-Output is JSON. Parse `response.content` for the agent's reply.
-
-### Listing Sessions
-
-View all active sessions:
-
-```bash
+# List all sessions
 uvx claudy list
-```
 
-Shows session names, IDs, creation time, last used time, and message count.
-
-### Checking Session Status
-
-Get detailed status for a specific session:
-
-```bash
+# Get session status
 uvx claudy status <name>
-```
 
-Useful for monitoring idle time (sessions auto-cleanup after 2 hours).
-
-### Cleaning Up Sessions
-
-Remove sessions manually:
-
-```bash
-# Single session
+# Cleanup sessions
 uvx claudy cleanup <name>
-
-# All sessions
 uvx claudy cleanup --all
+
+# Stop the server
+uvx claudy server stop
 ```
 
-Sessions are in-memory and reset when the server restarts.
+## MCP Tools
 
-## Parallel Execution Patterns
+### `claudy_call`
 
-Claudy's killer feature is parallel agent orchestration with the fan-out/fan-in pattern.
+Send a message to an agent session (auto-creates if doesn't exist).
 
-### Fan-out/Fan-in Pattern (Recommended)
+**Parameters:**
+- `name` (str): Session name
+- `message` (str): Message to send
+- `verbosity` (str): "quiet", "normal", or "verbose" (default: "normal")
+- `fork` (bool): Fork before sending (default: false)
+- `fork_name` (str, optional): Name for forked session
+- `parent_session_id` (str, optional): Parent to inherit from (auto-detected)
 
-**Core concept**: Launch multiple agents simultaneously (fan-out), then aggregate results (fan-in).
+**Returns:** `{"success": true, "name": "...", "response": "...", "session_id": "..."}`
 
-**Using MCP tools (preferred when available):**
+### `claudy_call_async`
 
-```python
-# Fan-out: Launch agents in background
-claudy_call_async(name="security", message="Audit for vulnerabilities")
-claudy_call_async(name="performance", message="Profile bottlenecks")
-claudy_call_async(name="docs", message="Check documentation")
+Start agent task in background, returns immediately for parallel execution.
 
-# Optional: Monitor progress
-claudy_check_status(names=["security", "performance", "docs"])
+**Parameters:**
+- `name` (str): Session name
+- `message` (str): Message to send
+- `verbosity` (str): "quiet", "normal", or "verbose" (default: "normal")
+- `parent_session_id` (str, optional): Parent to inherit from
 
-# Fan-in: Wait and aggregate all results
-results = claudy_get_results(
-    names=["security", "performance", "docs"],
-    timeout=300
-)
-# Process aggregated results
+**Returns:** `{"success": true, "name": "...", "status": "running"}`
+
+### `claudy_get_results`
+
+Wait for and aggregate results from multiple background agents (blocking until complete).
+
+**Parameters:**
+- `names` (list[str]): List of session names to wait for
+- `timeout` (int, optional): Timeout in seconds
+
+**Returns:** `{"success": true, "results": {"name1": {...}, "name2": {...}}}`
+
+### `claudy_check_status`
+
+Check if background tasks are still running.
+
+**Parameters:**
+- `names` (list[str], optional): Session names to check (if None, checks all)
+
+**Returns:** `{"success": true, "tasks": {"name1": "running", "name2": "completed"}}`
+
+### `claudy_list`
+
+List all active agent sessions.
+
+**Returns:** `{"success": true, "sessions": [...]}`
+
+### `claudy_status`
+
+Get detailed status of a specific session.
+
+**Parameters:**
+- `name` (str): Session name
+
+**Returns:** Session metadata (created_at, last_used, message_count, etc.)
+
+### `claudy_cleanup`
+
+Cleanup one or all sessions.
+
+**Parameters:**
+- `name` (str, optional): Session name to cleanup
+- `all` (bool): Cleanup all sessions (default: false)
+
+**Returns:** `{"success": true, "message": "..."}`
+
+## Usage Patterns
+
+### Basic Session Management
+
 ```
+# Auto-create and call a session
+Use claudy_call with name="researcher" and message="Search for latest AI papers"
 
-**Using CLI (when MCP not available):**
+# Check status
+Use claudy_status with name="researcher"
 
-```bash
-# Fan-out: Launch with background processes
-uvx claudy call security "Audit security" &
-uvx claudy call performance "Profile performance" &
-uvx claudy call docs "Check documentation" &
-wait
-
-# Fan-in: Parse JSON responses
-# (Use jq or similar to aggregate)
+# Cleanup
+Use claudy_cleanup with name="researcher"
 ```
-
-**When to use**: Analyzing multiple independent aspects simultaneously (security + performance + docs).
-
-### Role-based Persistent Sessions
-
-**Core concept**: Create specialized agents with specific roles, maintain context across multiple interactions.
-
-**Pattern:**
-
-```bash
-# 1. Initialize role-based agents (one-time setup)
-uvx claudy call solver "You are the implementation expert. Understand this problem: [description]"
-uvx claudy call reviewer "You are the code reviewer. Focus on correctness and edge cases."
-uvx claudy call tester "You are the test engineer. Generate comprehensive test cases."
-
-# 2. Implementation cycle (agents remember their roles)
-uvx claudy call solver "Implement the solution using dynamic programming"
-
-# 3. Parallel review while solver works
-uvx claudy call reviewer "Review this code for overflow issues: [code]" &
-uvx claudy call tester "Prepare edge case tests for array size 10^5" &
-wait
-
-# 4. Incremental refinement (context preserved)
-uvx claudy call solver "Fix the overflow issue that reviewer mentioned"
-uvx claudy call reviewer "Verify the fix in lines 42-45"
-
-# 5. Continuous interaction (each agent remembers everything)
-uvx claudy call reviewer "Are all the issues I mentioned earlier resolved?"
-# → reviewer recalls the entire history of issues raised
-```
-
-**Why this works:**
-- Each agent maintains full conversation context
-- Agents specialize in their role over time
-- No need to re-explain context in every call
-- Enables iterative refinement with persistent memory
-
-**When to use**:
-- Complex problems requiring multiple perspectives
-- Iterative workflows with review cycles
-- Long-running tasks with role specialization
-
-### Multi-approach Exploration with Forking
-
-**Core concept**: Fork a session to explore alternative solutions simultaneously.
-
-```bash
-# Base understanding
-uvx claudy call solver "Analyze the problem constraints"
-
-# Fork to try different algorithms
-uvx claudy call solver "Try DP approach" --fork --fork-name solver_dp
-uvx claudy call solver "Try segment tree" --fork --fork-name solver_segtree
-
-# Each fork evolves independently
-uvx claudy call solver_dp "Optimize for time complexity"
-uvx claudy call solver_segtree "Optimize for space complexity"
-
-# Compare final results
-uvx claudy status solver_dp
-uvx claudy status solver_segtree
-```
-
-**When to use**: Exploring multiple solution paths without losing progress.
-
-### Dynamic Agent Scaling
-
-**Core concept**: Spawn N agents based on input data.
-
-```bash
-# Example: Analyze multiple files
-for file in src/*.py; do
-  agent_name="analyzer_$(basename $file .py)"
-  uvx claudy call "$agent_name" "Analyze $file for code quality" &
-done
-wait
-
-# Aggregate results
-uvx claudy list  # Get all agent names
-```
-
-**When to use**: Processing multiple independent items in parallel.
-
-## Session Management
 
 ### Context Preservation
 
-Sessions remember full conversation history:
-
-```bash
-uvx claudy call memory_test "Remember this number: 42"
-uvx claudy call memory_test "What number did I tell you?"
-# Response: "42" ✓
 ```
-
-Use this for multi-turn delegations where agents build on previous context.
+1. claudy_call(name="memory_test", message="Remember this number: 42")
+2. claudy_call(name="memory_test", message="What number did I ask you to remember?")
+   → "42" ✓ Context preserved!
+```
 
 ### Session Forking
 
-Fork sessions to explore alternative approaches without losing original:
+```
+# Create base session
+claudy_call(name="analysis", message="Analyze this codebase")
 
-```bash
-# Base analysis
-uvx claudy call analysis "Analyze refactoring options"
+# Fork to explore alternatives
+claudy_call(
+    name="analysis",
+    message="Try refactoring approach B",
+    fork=True,
+    fork_name="analysis_fork_b"
+)
 
-# Fork to try alternative
-uvx claudy call analysis "Try microservices approach" \
-  --fork --fork-name analysis_microservices
-
-# Original continues independently
-uvx claudy call analysis "Continue with monolith optimization"
+# Original session unchanged
+claudy_call(name="analysis", message="Continue with approach A")
 ```
 
-Both sessions now independent. Use forking to:
-- Explore multiple solution paths in parallel
-- A/B test different approaches
-- Branch conversations at decision points
+### Parallel Execution
 
-## Workflow Examples
+```
+# Launch multiple agents in parallel
+claudy_call_async('security', 'Audit code for vulnerabilities')
+claudy_call_async('performance', 'Find performance bottlenecks')
+claudy_call_async('docs', 'Generate API documentation')
 
-### Example 1: Comprehensive Codebase Analysis
-
-```bash
-# Launch 4 specialized agents
-uvx claudy call security "Audit for vulnerabilities in src/" &
-uvx claudy call performance "Profile performance bottlenecks" &
-uvx claudy call architecture "Review architectural patterns" &
-uvx claudy call dependencies "Check for outdated dependencies" &
-wait
-
-# View all results
-uvx claudy list
-# Parse JSON responses from each agent
+# Collect all results
+claudy_get_results(['security', 'performance', 'docs'])
 ```
 
-### Example 2: Multi-Path Research
+## Key Features
 
-```bash
-# Create base research agent
-uvx claudy call research "Research state-of-the-art RAG systems"
+- **MCP Native**: Built with FastMCP for seamless Claude Code integration
+- **Context Preservation**: Agents remember full conversation history
+- **Session Forking**: Branch conversations to explore alternative paths
+- **Auto Cleanup**: 20-minute idle timeout prevents resource leaks
+- **Permission Inheritance**: Auto-created sessions bypass permissions
+- **Parallel Execution**: Run multiple agents concurrently with `claudy_call_async`
+- **Zero Configuration**: Works out of the box with uvx
 
-# Fork to explore different architectures
-uvx claudy call research "Investigate vector databases" \
-  --fork --fork-name research_vectordb
+## Configuration
 
-uvx claudy call research "Investigate hybrid search" \
-  --fork --fork-name research_hybrid
+Sessions auto-cleanup after 20 minutes of inactivity. To customize:
 
-# Each fork explores independently
-# Compare findings later
+Edit `claudy/config.py`:
+```python
+SESSION_IDLE_TIMEOUT = 1200  # 20 minutes in seconds
+SESSION_CLEANUP_INTERVAL = 300  # 5 minutes
 ```
 
-### Example 3: Incremental Delegation
+## Architecture
 
-```bash
-# Start high-level analysis
-uvx claudy call analyzer "Analyze this codebase structure"
-
-# Based on findings, delegate specific tasks
-uvx claudy call refactorer "Refactor the auth module per analyzer's suggestions"
-uvx claudy call tester "Write tests for the refactored auth module"
-uvx claudy call documenter "Document the new auth implementation"
-
-# All agents work independently but share context through your coordination
+```
+Claude Code MCP Client
+    ↓ (MCP stdio)
+FastMCP Server
+    ↓
+ClaudeSDKClient Sessions (in-memory)
+    └─ Auto cleanup (20min idle timeout)
 ```
 
-## Reference Materials
+**Design:**
+- Single process (no HTTP server in MCP mode)
+- Global session storage (shared across all MCP connections)
+- Background TTL cleanup task
+- Auto-detection of current Claude session ID for permission inheritance
 
-For detailed CLI documentation, see `references/cli_reference.md`.
+## Important Notes
 
-## Notes
+### Server Start Required
 
-- Sessions auto-cleanup after 2 hours of inactivity (configurable)
-- All sessions are in-memory (reset on server restart)
-- Agents created via claudy inherit parent permissions (no prompt spam)
-- Output is always JSON for easy parsing and automation
+For CLI usage, you **must** start the server first:
+
+```bash
+uvx claudy server start
+```
+
+Then you can use `call`, `list`, `status`, `cleanup` commands. The server will **NOT** auto-start.
+
+### Session Persistence
+
+Sessions are **in-memory only**. They are lost when:
+- Server stops
+- Session idle for 20+ minutes
+- Manual cleanup via `claudy_cleanup`
+
+### MCP vs CLI Mode
+
+- **MCP mode** (recommended): Direct stdio, used by Claude Code
+- **CLI mode**: HTTP server, requires `claudy server start`
+
+Both modes share the same session storage when running.
+
+## Troubleshooting
+
+### "Server is not running"
+
+Run `uvx claudy server start` before using CLI commands.
+
+### Sessions disappearing
+
+Sessions cleanup after 20 minutes of inactivity. Use them regularly or reduce `SESSION_IDLE_TIMEOUT`.
+
+### Fork fails
+
+Ensure parent session has sent at least one message (session_id must exist).
+
+## Requirements
+
+- Python 3.10+
+- Claude Code 2.0+ (for claude-agent-sdk)
+- fastmcp >= 2.12.0
+- claude-agent-sdk >= 0.1.4
+
+## License
+
+MIT License
+
+---
+
+**Built with ❤️ using [FastMCP](https://github.com/jlowin/fastmcp) and [claude-agent-sdk](https://github.com/anthropics/claude-agent-sdk-python)**

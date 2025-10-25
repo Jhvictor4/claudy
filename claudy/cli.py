@@ -8,7 +8,7 @@ import subprocess
 import sys
 import time
 
-import asyncio
+import anyio
 from fastmcp import Client
 
 from .config import (
@@ -83,26 +83,9 @@ def start_server():
                 await client.list_tools()
                 return True
 
-        return asyncio.run(check_health())
+        return anyio.run(check_health)
     except Exception:
         return False
-
-
-def ensure_server_running():
-    """Ensure the server is running, start it if needed."""
-    if not is_server_running():
-        if not start_server():
-            print(
-                json.dumps(
-                    {
-                        "success": False,
-                        "error": "Failed to start server",
-                        "error_code": "SERVER_START_ERROR",
-                    },
-                    ensure_ascii=False,
-                )
-            )
-            sys.exit(1)
 
 
 def stop_server():
@@ -167,7 +150,7 @@ def call_tool(tool_name: str, params: dict) -> dict:
                 "error_code": "UNKNOWN_ERROR",
             }
 
-    return asyncio.run(_call())
+    return anyio.run(_call)
 
 
 def print_output(result: dict, verbosity: str = "normal"):
@@ -314,8 +297,19 @@ def main():
                 sys.exit(1)
         sys.exit(0)
 
-    # For all other commands, ensure server is running
-    ensure_server_running()
+    # For all other commands, check if server is running
+    if not is_server_running():
+        print(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": "Server is not running. Start it with: claudy server start",
+                    "error_code": "SERVER_NOT_RUNNING",
+                },
+                ensure_ascii=False,
+            )
+        )
+        sys.exit(1)
 
     # Execute command
     try:

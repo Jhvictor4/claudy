@@ -2,6 +2,7 @@
 """FastMCP-based Claudy server for managing Claude agent sessions."""
 
 import asyncio
+import json
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -12,9 +13,10 @@ from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
 from claude_agent_sdk.types import TextBlock
 from fastmcp import FastMCP, Context
 
-# Session management configuration
-SESSION_IDLE_TIMEOUT = 7200  # 2 hours in seconds
-SESSION_CLEANUP_INTERVAL = 300  # Check every 5 minutes
+try:
+    from .config import SESSION_IDLE_TIMEOUT, SESSION_CLEANUP_INTERVAL
+except ImportError:
+    from claudy.config import SESSION_IDLE_TIMEOUT, SESSION_CLEANUP_INTERVAL
 
 
 def get_current_claude_session_id() -> Optional[str]:
@@ -85,20 +87,31 @@ async def lifespan(server: FastMCP):
     try:
         yield
     finally:
-        # Cleanup on shutdown
+        # Cleanup on shutdown - handle both graceful and forced shutdown
         cleanup_task.cancel()
         try:
-            await cleanup_task
-        except asyncio.CancelledError:
-            pass
+            await asyncio.wait_for(cleanup_task, timeout=2.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass  # Expected - task was cancelled or took too long
+        except Exception:
+            pass  # Log unexpected errors but don't crash shutdown
 
-        # Disconnect all sessions
-        for client, _ in _global_sessions.values():
+        # Disconnect all sessions with timeout protection
+        disconnect_tasks = []
+        for client, _ in list(_global_sessions.values()):
+            disconnect_tasks.append(asyncio.create_task(client.disconnect()))
+
+        if disconnect_tasks:
             try:
-                await client.disconnect()
-            except Exception:
-                pass
+                await asyncio.wait_for(
+                    asyncio.gather(*disconnect_tasks, return_exceptions=True),
+                    timeout=5.0
+                )
+            except asyncio.TimeoutError:
+                pass  # Some clients didn't disconnect in time, continue anyway
+
         _global_sessions.clear()
+        _background_tasks.clear()
 
 
 # Initialize FastMCP server
@@ -117,7 +130,7 @@ KEY FEATURES:
 - Auto-creates persistent agent sessions (no setup needed)
 - Sessions remember full conversation history
 - Fork sessions to explore different approaches
-- 2-hour idle timeout (auto-cleanup)
+- 20-minute idle timeout (auto-cleanup)
 - Sessions inherit permissions automatically
 
 COMMON PATTERNS:
@@ -193,9 +206,8 @@ async def _execute_call(
 ) -> dict:
     """Internal helper to execute a call (used by both sync and async versions)."""
     try:
-        # Auto-detect current Claude session ID if not provided
-        if not parent_session_id:
-            parent_session_id = get_current_claude_session_id()
+        # Note: parent_session_id is only used when explicitly provided
+        # Auto-detection disabled to prevent context leakage
 
         # Handle forking
         if fork:
@@ -372,7 +384,6 @@ async def claudy_call(
     """
     result = await _execute_call(name, message, verbosity, fork, fork_name, parent_session_id, timeout)
 
-    import json
     return json.dumps(result, indent=2, ensure_ascii=False)
 
 
@@ -415,7 +426,6 @@ async def claudy_call_async(
     task = asyncio.create_task(_execute_call(name, message, verbosity, parent_session_id=parent_session_id, timeout=timeout))
     _background_tasks[name] = task
 
-    import json
     return json.dumps({
         "success": True,
         "name": name,
@@ -496,7 +506,6 @@ async def claudy_get_results(names: list[str], timeout: Optional[int] = None) ->
             if name in _background_tasks:
                 del _background_tasks[name]
 
-    import json
     return json.dumps({
         "success": True,
         "results": results
@@ -537,7 +546,6 @@ async def claudy_check_status(names: Optional[list[str]] = None) -> str:
         else:
             tasks_status[name] = "running"
 
-    import json
     return json.dumps({
         "success": True,
         "tasks": tasks_status
@@ -552,7 +560,6 @@ async def claudy_list() -> str:
         for name, (_, metadata) in _global_sessions.items()
     ]
 
-    import json
     return json.dumps(
         {"success": True, "sessions": sessions_list},
         indent=2,
@@ -568,7 +575,6 @@ async def claudy_status(name: str) -> str:
         name: Session name to check status
     """
     if name not in _global_sessions:
-        import json
         return json.dumps(
             {
                 "success": False,
@@ -581,7 +587,6 @@ async def claudy_status(name: str) -> str:
 
     _, metadata = _global_sessions[name]
 
-    import json
     return json.dumps(
         {"success": True, "name": name, **metadata},
         indent=2,
@@ -607,7 +612,6 @@ async def claudy_cleanup(name: Optional[str] = None, all: bool = False) -> str:
                 pass
         _global_sessions.clear()
 
-        import json
         return json.dumps(
             {"success": True, "message": f"Cleaned up {count} session(s)"},
             indent=2,
@@ -615,7 +619,6 @@ async def claudy_cleanup(name: Optional[str] = None, all: bool = False) -> str:
         )
     else:
         if not name:
-            import json
             return json.dumps(
                 {"success": False, "error": "Session name is required"},
                 indent=2,
@@ -623,7 +626,6 @@ async def claudy_cleanup(name: Optional[str] = None, all: bool = False) -> str:
             )
 
         if name not in _global_sessions:
-            import json
             return json.dumps(
                 {
                     "success": False,
@@ -643,7 +645,6 @@ async def claudy_cleanup(name: Optional[str] = None, all: bool = False) -> str:
 
         del _global_sessions[name]
 
-        import json
         return json.dumps(
             {
                 "success": True,

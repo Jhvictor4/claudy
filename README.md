@@ -85,7 +85,7 @@ uvx claudy cleanup --all
 uvx claudy server
 ```
 
-Sessions persist across calls and auto-cleanup after 2 hours of inactivity.
+Sessions persist across calls and auto-cleanup after 20 minutes of inactivity.
 
 ## MCP Tools (for Claude)
 
@@ -257,7 +257,7 @@ claudy_get_results([names])
 Edit `claudy/mcp_server.py`:
 
 ```python
-SESSION_IDLE_TIMEOUT = 7200  # 2 hours
+SESSION_IDLE_TIMEOUT = 1200  # 2 hours
 SESSION_CLEANUP_INTERVAL = 300  # 5 minutes
 ```
 
