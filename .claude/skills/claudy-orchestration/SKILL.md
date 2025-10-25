@@ -9,29 +9,13 @@ Multi-agent session manager for Claude Code. Spawn and manage persistent Claude 
 
 ## Quick Start
 
-### Installation
+**⚠️ IMPORTANT**: Claudy works in **two modes**:
+1. **CLI Mode** (Always available, no setup needed) - Use `uvx claudy` commands
+2. **MCP Mode** (Optional, for Claude Code integration) - Add to `.mcp.json`
 
-Add to your `.mcp.json`:
+**If you don't have MCP configured, use CLI mode!** It provides the same functionality.
 
-```json
-{
-  "mcpServers": {
-    "claudy": {
-      "type": "stdio",
-      "command": "uvx",
-      "args": [
-        "--from",
-        "git+https://github.com/kangjihyeok/claude-agentic-skills.git@main#subdirectory=claudy",
-        "fastmcp",
-        "run",
-        "claudy.mcp_server:mcp"
-      ]
-    }
-  }
-}
-```
-
-### CLI Usage
+### Option 1: CLI Usage (No Setup Required)
 
 ```bash
 # Start the server (required first step)
@@ -54,6 +38,28 @@ uvx claudy cleanup --all
 uvx claudy server stop
 ```
 
+### Option 2: MCP Integration (Optional)
+
+Add to your `.mcp.json` for Claude Code integration:
+
+```json
+{
+  "mcpServers": {
+    "claudy": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/kangjihyeok/claude-agentic-skills.git@main#subdirectory=claudy",
+        "fastmcp",
+        "run",
+        "claudy.mcp_server:mcp"
+      ]
+    }
+  }
+}
+```
+
 ## MCP Tools
 
 ### `claudy_call`
@@ -66,7 +72,7 @@ Send a message to an agent session (auto-creates if doesn't exist).
 - `verbosity` (str): "quiet", "normal", or "verbose" (default: "normal")
 - `fork` (bool): Fork before sending (default: false)
 - `fork_name` (str, optional): Name for forked session
-- `parent_session_id` (str, optional): Parent to inherit from (auto-detected)
+- `parent_session_id` (str, optional): Explicit parent session to inherit context from
 
 **Returns:** `{"success": true, "name": "...", "response": "...", "session_id": "..."}`
 
@@ -78,7 +84,7 @@ Start agent task in background, returns immediately for parallel execution.
 - `name` (str): Session name
 - `message` (str): Message to send
 - `verbosity` (str): "quiet", "normal", or "verbose" (default: "normal")
-- `parent_session_id` (str, optional): Parent to inherit from
+- `parent_session_id` (str, optional): Explicit parent session to inherit context from
 
 **Returns:** `{"success": true, "name": "...", "status": "running"}`
 
@@ -181,13 +187,13 @@ claudy_get_results(['security', 'performance', 'docs'])
 
 ## Key Features
 
-- **MCP Native**: Built with FastMCP for seamless Claude Code integration
+- **Dual Mode**: CLI (no setup) or MCP (Claude Code integration)
 - **Context Preservation**: Agents remember full conversation history
 - **Session Forking**: Branch conversations to explore alternative paths
 - **Auto Cleanup**: 20-minute idle timeout prevents resource leaks
-- **Permission Inheritance**: Auto-created sessions bypass permissions
+- **Independent Sessions**: Clean context, no automatic inheritance
 - **Parallel Execution**: Run multiple agents concurrently with `claudy_call_async`
-- **Zero Configuration**: Works out of the box with uvx
+- **Zero Configuration**: CLI works out of the box with uvx
 
 ## Configuration
 
@@ -202,23 +208,34 @@ SESSION_CLEANUP_INTERVAL = 300  # 5 minutes
 ## Architecture
 
 ```
-Claude Code MCP Client
-    ↓ (MCP stdio)
-FastMCP Server
-    ↓
-ClaudeSDKClient Sessions (in-memory)
-    └─ Auto cleanup (20min idle timeout)
+[CLI Mode]                      [MCP Mode]
+claudy CLI → HTTP Server        Claude Code → stdio
+         ↓                               ↓
+         └──────── FastMCP Server ───────┘
+                        ↓
+            ClaudeSDKClient Sessions (in-memory)
+                        ↓
+                Auto cleanup (20min idle timeout)
 ```
 
 **Design:**
-- Single process (no HTTP server in MCP mode)
-- Global session storage (shared across all MCP connections)
-- Background TTL cleanup task
-- Auto-detection of current Claude session ID for permission inheritance
+- **CLI Mode**: HTTP server (starts with `claudy server start`)
+- **MCP Mode**: Direct stdio communication (no HTTP server)
+- Global session storage (shared across all connections)
+- Background TTL cleanup task (20-minute idle timeout)
+- Independent sessions (no automatic context inheritance)
 
 ## Important Notes
 
-### Server Start Required
+### Use CLI Mode if MCP is Not Configured
+
+**You don't need MCP to use claudy!** If you see MCP tool errors:
+1. Start the HTTP server: `uvx claudy server start`
+2. Use CLI commands: `uvx claudy call <name> "<message>"`
+
+CLI mode provides **identical functionality** to MCP mode.
+
+### Server Start Required (CLI Mode)
 
 For CLI usage, you **must** start the server first:
 
@@ -237,10 +254,14 @@ Sessions are **in-memory only**. They are lost when:
 
 ### MCP vs CLI Mode
 
-- **MCP mode** (recommended): Direct stdio, used by Claude Code
-- **CLI mode**: HTTP server, requires `claudy server start`
+| Feature | CLI Mode | MCP Mode |
+|---------|----------|----------|
+| Setup | None (always works) | Requires `.mcp.json` configuration |
+| Server | HTTP (manual start) | stdio (auto-managed by Claude Code) |
+| Usage | `uvx claudy call ...` | `Use claudy_call tool` |
+| Functionality | ✅ Full | ✅ Full |
 
-Both modes share the same session storage when running.
+Both modes share the same session storage and features.
 
 ## Troubleshooting
 
