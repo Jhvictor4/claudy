@@ -122,6 +122,38 @@ Get detailed status of a specific session.
 
 **Returns:** Session metadata (created_at, last_used, message_count, etc.)
 
+### `claudy_share_context` (NEW!)
+
+Share context from one session that other sessions can access.
+
+**Parameters:**
+- `session_name` (str): Name of the session sharing the context
+- `context_key` (str): Unique identifier for this context (e.g., "verification_findings", "test_results")
+- `context_data` (dict): Dictionary containing the context to share
+
+**Returns:** `{"success": true, "context_key": "...", "session_name": "...", "message": "..."}`
+
+**Use Cases:**
+- Verifier shares findings → Analyst validates them
+- Generator shares solution → Tester shares results → Fixer accesses both
+- Multiple specialists share analysis → Lead agent synthesizes
+
+### `claudy_get_shared_context` (NEW!)
+
+Retrieve shared context from other sessions.
+
+**Parameters:**
+- `context_key` (str): The context identifier to retrieve
+- `source_session` (str, optional): Optional filter by source session name
+
+**Returns:** `{"success": true, "context_key": "...", "count": N, "contexts": [...]}`
+
+Each context contains:
+- `session_name`: Source session
+- `session_id`: Source session ID
+- `data`: The shared data
+- `timestamp`: When it was shared
+
 ### `claudy_cleanup`
 
 Cleanup one or all sessions.
@@ -155,6 +187,30 @@ Use claudy_cleanup with name="researcher"
    → "42" ✓ Context preserved!
 ```
 
+### Inter-Session Context Sharing (NEW!)
+
+```
+# Verifier agent shares findings
+claudy_call(name="verifier", message="Review code for bugs")
+claudy_share_context(
+    session_name="verifier",
+    context_key="bug_findings",
+    context_data={"critical_bugs": [...], "warnings": [...]}
+)
+
+# Analyst agent validates findings
+claudy_call(name="analyst", message=f"""
+Review these bug findings and mark each as 'confirmed' or 'false_positive':
+{claudy_get_shared_context("bug_findings", "verifier")}
+""")
+
+# Fixer accesses validated findings
+claudy_call(name="fixer", message=f"""
+Fix only the confirmed bugs:
+{claudy_get_shared_context("validated_bugs", "analyst")}
+""")
+```
+
 ### Session Forking
 
 ```
@@ -184,6 +240,106 @@ claudy_call_async('docs', 'Generate API documentation')
 # Collect all results
 claudy_get_results(['security', 'performance', 'docs'])
 ```
+
+### IOI/Competitive Programming Pattern (NEW!)
+
+Multi-stage workflow with specialized agents and context sharing. Based on solving Korean Olympiad in Informatics problems using iterative refinement.
+
+```
+## Agent Role Templates
+
+# Code Generator Agent - Focuses on initial correctness
+GENERATOR_PROMPT = """
+You are an IOI algorithm expert specializing in generating optimal solutions.
+PRIORITY: Correctness > Optimization
+OUTPUT: Working code + complexity analysis + edge cases
+Allowed Tools: Read, Grep, Glob, WebSearch
+"""
+
+# Strict Verifier Agent - Finds ALL issues (false positives OK)
+VERIFIER_PROMPT = """
+You are a strict IOI coach and automated judge combined.
+PRIORITY: Find ALL potential issues, even if uncertain
+OUTPUT: Categorized issues (Critical Logic Error, TLE/MLE, Implementation Bug, Edge Case)
+Style: Adversarial, detailed, quote specific code sections
+"""
+
+# Analyst Agent - Validates verifier findings (prevents over-fixing!)
+ANALYST_PROMPT = """
+You are a senior IOI coach judging verification reports.
+PRIORITY: Distinguish real issues from false positives
+OUTPUT: Each finding marked as 'confirmed' or 'false_positive' with justification
+Style: Evidence-based, conservative
+"""
+
+# Conservative Fixer Agent - Minimal changes, test after each
+FIXER_PROMPT = """
+You are a careful code improver for IOI solutions.
+PRIORITY: Preserve working functionality, change ONE thing at a time
+OUTPUT: Incremental fix + test + next fix (not bulk changes!)
+Style: Conservative, test-driven
+"""
+
+# Lead Synthesizer Agent - Final integration and decision making
+LEAD_PROMPT = """
+You are the meta-coordinator for IOI problem solving.
+PRIORITY: Synthesize all agent insights, make final decisions
+ACCESS: All shared contexts from specialized agents
+OUTPUT: Final solution that integrates verified improvements only
+Style: Holistic, evidence-based
+"""
+
+## Complete IOI Workflow
+
+# Step 1: Generate initial solution
+Use claudy_call with name="code_generator" and GENERATOR_PROMPT + problem description
+Use claudy_share_context to share the solution under key="solution_v1"
+
+# Step 2: Self-critique
+Use claudy_call with name="critic" and message including solution_v1
+Use claudy_share_context to share critique under key="critique"
+
+# Step 3: Strict verification
+Use claudy_call with name="verifier" and message including solution + critique
+Use claudy_share_context to share findings under key="verification_findings"
+
+# Step 4: Analyst validation (CRITICAL - prevents over-fixing!)
+Use claudy_call with name="analyst" and message:
+  "Review these findings and mark each as 'confirmed' or 'false_positive':
+  {claudy_get_shared_context('verification_findings', 'verifier')}"
+Use claudy_share_context to share validated issues under key="confirmed_issues"
+
+# Step 5: Incremental fixing with testing
+baseline_score = test_solution(solution_v1)
+For each confirmed issue (one at a time):
+    Use claudy_call with name="fixer" and message:
+      "Fix ONLY this issue: {issue}
+       Previous score: {current_score}
+       {claudy_get_shared_context('solution_v1')}
+       Provide updated code."
+    Test the fix
+    If score >= current_score:
+        Accept fix, update current_score
+        Use claudy_share_context with key="solution_v{iteration}"
+    Else:
+        Reject fix, continue to next issue
+
+# Step 6: Lead agent final synthesis (if not 100% score)
+If score < 100:
+    Use claudy_call with name="lead" and message:
+      "Synthesize all contexts and achieve 100 points:
+       {claudy_get_shared_context('solution_v1')}
+       {claudy_get_shared_context('critique')}
+       {claudy_get_shared_context('verification_findings')}
+       {claudy_get_shared_context('confirmed_issues')}
+       Test results: {all_test_results}
+       Make final improvement."
+```
+
+**Key Lesson from Real Usage**: The 44→23 point regression happened because we skipped Step 4 (Analyst validation) and applied all verifier findings at once in Step 5. The improved workflow fixes this by:
+1. Adding validation layer (Step 4)
+2. Applying changes incrementally with testing (Step 5)
+3. Lead agent synthesis with full context (Step 6)
 
 ## Key Features
 

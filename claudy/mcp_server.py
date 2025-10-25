@@ -11,7 +11,7 @@ from typing import Dict, Optional
 
 from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
 from claude_agent_sdk.types import TextBlock
-from fastmcp import FastMCP, Context
+from fastmcp import FastMCP
 
 try:
     from .config import SESSION_IDLE_TIMEOUT, SESSION_CLEANUP_INTERVAL
@@ -47,6 +47,10 @@ _global_sessions: Dict[str, tuple[ClaudeSDKClient, dict]] = {}
 # Key: session_name, Value: asyncio.Task
 _background_tasks: Dict[str, asyncio.Task] = {}
 
+# Shared context storage for inter-session communication
+# Key: context_key, Value: list of {session_id, data, timestamp}
+_shared_contexts: Dict[str, list] = {}
+
 
 async def cleanup_idle_sessions():
     """Background task to cleanup idle sessions."""
@@ -79,7 +83,7 @@ async def cleanup_idle_sessions():
 
 
 @asynccontextmanager
-async def lifespan(server: FastMCP):
+async def lifespan(_: FastMCP):
     """Lifespan context manager for background tasks."""
     # Start background cleanup task
     cleanup_task = asyncio.create_task(cleanup_idle_sessions())
@@ -112,6 +116,7 @@ async def lifespan(server: FastMCP):
 
         _global_sessions.clear()
         _background_tasks.clear()
+        _shared_contexts.clear()
 
 
 # Initialize FastMCP server
@@ -592,6 +597,116 @@ async def claudy_status(name: str) -> str:
         indent=2,
         ensure_ascii=False
     )
+
+
+@mcp.tool
+async def claudy_share_context(
+    session_name: str,
+    context_key: str,
+    context_data: dict
+) -> str:
+    """Share context from one session that other sessions can access.
+
+    This enables inter-session communication where specialized agents can share their
+    findings, analysis, or results with other agents. Critical for multi-stage workflows
+    where validation agents need to access verifier findings, or lead agents need to
+    synthesize outputs from multiple specialized agents.
+
+    USE CASES:
+    - Verifier shares findings → Analyst validates them
+    - Multiple critics share analysis → Lead agent synthesizes
+    - Generator shares solution → Tester shares results → Fixer accesses both
+
+    EXAMPLES:
+    - Verifier: claudy_share_context('verifier', 'bugs_found', {'issues': [...], 'severity': 'high'})
+    - Analyst: claudy_get_shared_context('bugs_found', 'verifier')
+
+    Args:
+        session_name: Name of the session sharing the context
+        context_key: Unique identifier for this context (e.g., 'verification_findings', 'test_results')
+        context_data: Dictionary containing the context to share
+
+    Returns:
+        JSON with success status and context_id
+    """
+    if session_name not in _global_sessions:
+        return json.dumps({
+            "success": False,
+            "error": f"Session '{session_name}' not found"
+        }, indent=2, ensure_ascii=False)
+
+    _, metadata = _global_sessions[session_name]
+
+    # Initialize context key if it doesn't exist
+    if context_key not in _shared_contexts:
+        _shared_contexts[context_key] = []
+
+    # Add context entry
+    context_entry = {
+        "session_name": session_name,
+        "session_id": metadata.get("session_id"),
+        "data": context_data,
+        "timestamp": datetime.now().isoformat()
+    }
+    _shared_contexts[context_key].append(context_entry)
+
+    return json.dumps({
+        "success": True,
+        "context_key": context_key,
+        "session_name": session_name,
+        "message": f"Context '{context_key}' shared from session '{session_name}'"
+    }, indent=2, ensure_ascii=False)
+
+
+@mcp.tool
+async def claudy_get_shared_context(
+    context_key: str,
+    source_session: Optional[str] = None
+) -> str:
+    """Retrieve shared context from other sessions.
+
+    Access context data that other sessions have shared. Optionally filter by source session.
+    Returns all matching contexts with metadata (session, timestamp, data).
+
+    USE CASES:
+    - Analyst retrieves verifier findings to validate
+    - Fixer retrieves both test results and original solution
+    - Lead agent retrieves outputs from all specialized agents
+
+    EXAMPLES:
+    - Get all findings: claudy_get_shared_context('bugs_found')
+    - Get from specific session: claudy_get_shared_context('bugs_found', 'verifier')
+
+    Args:
+        context_key: The context identifier to retrieve
+        source_session: Optional filter by source session name
+
+    Returns:
+        JSON with list of matching contexts, each containing:
+        - session_name: Source session
+        - session_id: Source session ID
+        - data: The shared data
+        - timestamp: When it was shared
+    """
+    if context_key not in _shared_contexts:
+        return json.dumps({
+            "success": True,
+            "contexts": [],
+            "message": f"No contexts found for key '{context_key}'"
+        }, indent=2, ensure_ascii=False)
+
+    contexts = _shared_contexts[context_key]
+
+    # Filter by source session if specified
+    if source_session:
+        contexts = [c for c in contexts if c["session_name"] == source_session]
+
+    return json.dumps({
+        "success": True,
+        "context_key": context_key,
+        "count": len(contexts),
+        "contexts": contexts
+    }, indent=2, ensure_ascii=False)
 
 
 @mcp.tool
