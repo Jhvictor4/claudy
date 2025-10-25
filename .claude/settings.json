@@ -11,37 +11,8 @@
     "MAX_MCP_OUTPUT_TOKENS": "40000"
   },
   "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "UserPromptSubmit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/hook_ensure_feature_dev_plugin.py"
-          }
-        ]
-      },
-      {
-        "matcher": "WebSearch",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/hook_ensure_brave_plugin.py"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": ".claude/hooks/hook_ensure_rg.py"
-          }
-        ]
-      }
-    ],
+    "PreToolUse": [],
     "PostToolUse": [],
     "UserPromptSubmit": []
-  },
-  "enableAllProjectMcpServers": true
+  }
 }

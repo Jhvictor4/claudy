@@ -21,7 +21,30 @@ So I built this - a thin wrapper that lets Claude spawn and manage agent session
 
 ## Installation
 
-Add to your `.mcp.json`:
+### Option 1: Claude Code Plugin (Recommended)
+
+Install the complete plugin (includes both skill and MCP server):
+
+```bash
+# In Claude Code
+Add plugin: https://github.com/Jhvictor4/claudy
+```
+
+This installs:
+- **claudy-orchestration skill** - Automatic CLI integration
+- **claudy MCP server** - Direct tool access
+
+### Option 2: Skill Only
+
+For CLI integration without MCP tools:
+
+1. Download [`claudy-orchestration.zip`](./claudy-orchestration.zip)
+2. In Claude Code, go to Skills → Install from file
+3. Select the downloaded zip
+
+### Option 3: MCP Server Only
+
+For direct MCP tool access without skill, add to your `.mcp.json`:
 
 ```json
 {

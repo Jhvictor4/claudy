@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "claudy": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["claudy", "mcp"]
+    }
+  }
+}

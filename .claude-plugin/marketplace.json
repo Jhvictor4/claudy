@@ -1,0 +1,47 @@
+{
+  "name": "claudy-multi-agent",
+  "owner": {
+    "name": "Jihyeok Kang",
+    "email": "[email protected]"
+  },
+  "metadata": {
+    "description": "Multi-agent orchestration for Claude Code. Spawn, manage, and coordinate persistent Claude agent sessions with parallel execution support.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "claudy-multi-agent",
+      "source": "./",
+      "description": "Multi-agent orchestration plugin providing both CLI skill and MCP tools. Enables launching multiple agents in parallel, managing persistent sessions, and coordinating complex workflows beyond Task tool capabilities.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Jihyeok Kang"
+      },
+      "homepage": "https://github.com/Jhvictor4/claudy",
+      "repository": "https://github.com/Jhvictor4/claudy",
+      "license": "MIT",
+      "keywords": [
+        "multi-agent",
+        "orchestration",
+        "parallel-execution",
+        "claude-agent-sdk",
+        "claude-code",
+        "session-management",
+        "workflow",
+        "delegation",
+        "mcp",
+        "cli"
+      ],
+      "category": "development",
+      "tags": [
+        "agents",
+        "orchestration",
+        "productivity"
+      ],
+      "skills": [
+        "./.claude/skills/claudy-orchestration"
+      ],
+      "mcpServers": "./.claude-plugin/mcp.json"
+    }
+  ]
+}
