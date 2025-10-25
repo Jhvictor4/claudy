@@ -170,7 +170,7 @@ def call_tool(tool_name: str, params: dict) -> dict:
     return asyncio.run(_call())
 
 
-def print_output(result: dict, verbosity: str = VERBOSITY_NORMAL):
+def print_output(result: dict, verbosity: str = "normal"):
     """Print output based on verbosity level and result type."""
     if not result.get("success"):
         # Always print errors as JSON
@@ -178,7 +178,7 @@ def print_output(result: dict, verbosity: str = VERBOSITY_NORMAL):
         return
 
     # For successful operations, format based on verbosity
-    if verbosity == VERBOSITY_QUIET:
+    if verbosity == "quiet":
         # Only print the response text
         if "response" in result:
             print(result["response"])
@@ -206,10 +206,19 @@ def main():
     call_parser.add_argument("name", help="Session name")
     call_parser.add_argument("message", help="Message to send")
     call_parser.add_argument(
-        "--quiet", action="store_true", help="Only show final response"
+        "--verbosity",
+        choices=["quiet", "normal", "verbose"],
+        default="normal",
+        help="Output verbosity level (default: normal)"
     )
     call_parser.add_argument(
-        "--verbose", action="store_true", help="Show everything including thinking"
+        "--fork",
+        action="store_true",
+        help="Fork session before sending message"
+    )
+    call_parser.add_argument(
+        "--fork-name",
+        help="Name for forked session (auto-generated if not provided)"
     )
 
     # List command
@@ -243,10 +252,15 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    # Handle MCP command (stdio mode)
+    # Handle MCP command (stdio proxy to HTTP daemon)
     if args.command == "mcp":
-        from .mcp_server import mcp
-        mcp.run()
+        # Try to start server if not running (silent)
+        if not is_server_running():
+            start_server()
+
+        # Run stdio proxy that forwards to HTTP daemon
+        from .stdio_proxy import run_stdio_proxy
+        asyncio.run(run_stdio_proxy())
         return
 
     # Handle server management commands
@@ -306,20 +320,18 @@ def main():
     # Execute command
     try:
         if args.command == "call":
-            verbosity = (
-                VERBOSITY_QUIET
-                if args.quiet
-                else (VERBOSITY_VERBOSE if args.verbose else VERBOSITY_NORMAL)
-            )
-            result = call_tool(
-                "claudy_call",
-                {
-                    "name": args.name,
-                    "message": args.message,
-                    "verbosity": verbosity,
-                },
-            )
-            print_output(result, verbosity)
+            params = {
+                "name": args.name,
+                "message": args.message,
+                "verbosity": args.verbosity,
+            }
+            if args.fork:
+                params["fork"] = True
+                if args.fork_name:
+                    params["fork_name"] = args.fork_name
+
+            result = call_tool("claudy_call", params)
+            print_output(result, args.verbosity)
 
         elif args.command == "list":
             result = call_tool("claudy_list", {})

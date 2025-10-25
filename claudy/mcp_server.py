@@ -156,7 +156,17 @@ async def get_or_create_session(
         options.fork_session = True
 
     client = ClaudeSDKClient(options=options)
-    await client.connect()
+
+    # CRITICAL: Use anyio.to_thread.run_sync to isolate asyncio subprocess from anyio
+    # This prevents cancel scope conflicts between anyio (FastMCP) and asyncio (ClaudeSDKClient)
+    import anyio
+    loop = asyncio.get_event_loop()
+
+    def _connect_sync():
+        """Run connect() in asyncio event loop from thread."""
+        return asyncio.run_coroutine_threadsafe(client.connect(), loop).result()
+
+    await anyio.to_thread.run_sync(_connect_sync)
 
     metadata = {
         "created_at": datetime.now().isoformat(),
@@ -179,118 +189,145 @@ async def _execute_call(
     fork: bool = False,
     fork_name: Optional[str] = None,
     parent_session_id: Optional[str] = None,
+    timeout: int = 300,  # 5 minutes default timeout
 ) -> dict:
     """Internal helper to execute a call (used by both sync and async versions)."""
-    # Auto-detect current Claude session ID if not provided
-    if not parent_session_id:
-        parent_session_id = get_current_claude_session_id()
-
-    # Handle forking
-    if fork:
-        # Get parent session
-        if name not in _global_sessions:
-            return {
-                "success": False,
-                "error": f"Cannot fork non-existent session '{name}'",
-            }
-
-        _, parent_metadata = _global_sessions[name]
-        parent_session_id = parent_metadata.get("session_id")
-
+    try:
+        # Auto-detect current Claude session ID if not provided
         if not parent_session_id:
-            return {
-                "success": False,
-                "error": f"Cannot fork session '{name}': no session_id available. Send at least one message first.",
-            }
+            parent_session_id = get_current_claude_session_id()
 
-        # Determine fork session name
-        if not fork_name:
-            fork_name = f"{name}_fork_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        # Handle forking
+        if fork:
+            # Get parent session
+            if name not in _global_sessions:
+                return {
+                    "success": False,
+                    "error": f"Cannot fork non-existent session '{name}'",
+                }
 
-        # Check if fork name already exists
-        if fork_name in _global_sessions:
-            return {
-                "success": False,
-                "error": f"Fork session name '{fork_name}' already exists",
-            }
+            _, parent_metadata = _global_sessions[name]
+            parent_session_id = parent_metadata.get("session_id")
 
-        # Use fork_name as the target session
-        name = fork_name
+            if not parent_session_id:
+                return {
+                    "success": False,
+                    "error": f"Cannot fork session '{name}': no session_id available. Send at least one message first.",
+                }
 
-    # Get or create session
-    client, metadata = await get_or_create_session(name, parent_session_id)
+            # Determine fork session name
+            if not fork_name:
+                fork_name = f"{name}_fork_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-    # Send message and collect response
-    await client.query(message)
+            # Check if fork name already exists
+            if fork_name in _global_sessions:
+                return {
+                    "success": False,
+                    "error": f"Fork session name '{fork_name}' already exists",
+                }
 
-    response_parts = []
-    all_events = []
-    session_id = None
+            # Use fork_name as the target session
+            name = fork_name
 
-    async for msg in client.receive_response():
-        # Extract session_id from first message if available
-        if session_id is None and hasattr(msg, "session_id"):
-            session_id = msg.session_id
-            if metadata["session_id"] is None:
-                metadata["session_id"] = session_id
+        # Get or create session (with timeout)
+        client, metadata = await asyncio.wait_for(
+            get_or_create_session(name, parent_session_id),
+            timeout=30  # 30 seconds for session creation
+        )
 
-        # Collect all events for verbose mode
+        # Send message and collect response (with timeout)
+        async def _send_and_receive():
+            await client.query(message)
+
+            response_parts = []
+            all_events = []
+            session_id = None
+
+            async for msg in client.receive_response():
+                # Extract session_id from first message if available
+                if session_id is None and hasattr(msg, "session_id"):
+                    session_id = msg.session_id
+                    if metadata["session_id"] is None:
+                        metadata["session_id"] = session_id
+
+                # Collect all events for verbose mode
+                if verbosity == "verbose":
+                    msg_dict = {"type": type(msg).__name__}
+
+                    if hasattr(msg, "content"):
+                        msg_dict["content"] = []
+                        for block in msg.content:
+                            block_dict = {"type": getattr(block, "type", type(block).__name__)}
+
+                            if isinstance(block, TextBlock):
+                                block_dict["text"] = block.text
+                            elif hasattr(block, "thinking"):
+                                block_dict["thinking"] = block.thinking
+                            elif hasattr(block, "name") and hasattr(block, "input"):
+                                block_dict["name"] = block.name
+                                block_dict["input"] = block.input
+                            elif hasattr(block, "tool_use_id"):
+                                block_dict["tool_use_id"] = block.tool_use_id
+                                if hasattr(block, "content"):
+                                    block_dict["content"] = block.content
+
+                            msg_dict["content"].append(block_dict)
+
+                    if hasattr(msg, "stop_reason"):
+                        msg_dict["stop_reason"] = msg.stop_reason
+                    if hasattr(msg, "role"):
+                        msg_dict["role"] = msg.role
+
+                    all_events.append(msg_dict)
+
+                # Collect text for response
+                if hasattr(msg, "content"):
+                    for block in msg.content:
+                        if isinstance(block, TextBlock):
+                            response_parts.append(block.text)
+
+            return response_parts, all_events, session_id
+
+        # Execute with timeout
+        response_parts, all_events, session_id = await asyncio.wait_for(
+            _send_and_receive(),
+            timeout=timeout
+        )
+
+        # Update metadata
+        metadata["last_used"] = datetime.now().isoformat()
+        metadata["message_count"] += 1
+
+        # Build response based on verbosity
+        result = {
+            "success": True,
+            "name": name,
+            "response": "\n".join(response_parts),
+        }
+
+        if session_id:
+            result["session_id"] = session_id
+
+        if fork:
+            result["forked"] = True
+
         if verbosity == "verbose":
-            msg_dict = {"type": type(msg).__name__}
+            result["events"] = all_events
 
-            if hasattr(msg, "content"):
-                msg_dict["content"] = []
-                for block in msg.content:
-                    block_dict = {"type": getattr(block, "type", type(block).__name__)}
+        return result
 
-                    if isinstance(block, TextBlock):
-                        block_dict["text"] = block.text
-                    elif hasattr(block, "thinking"):
-                        block_dict["thinking"] = block.thinking
-                    elif hasattr(block, "name") and hasattr(block, "input"):
-                        block_dict["name"] = block.name
-                        block_dict["input"] = block.input
-                    elif hasattr(block, "tool_use_id"):
-                        block_dict["tool_use_id"] = block.tool_use_id
-                        if hasattr(block, "content"):
-                            block_dict["content"] = block.content
-
-                    msg_dict["content"].append(block_dict)
-
-            if hasattr(msg, "stop_reason"):
-                msg_dict["stop_reason"] = msg.stop_reason
-            if hasattr(msg, "role"):
-                msg_dict["role"] = msg.role
-
-            all_events.append(msg_dict)
-
-        # Collect text for response
-        if hasattr(msg, "content"):
-            for block in msg.content:
-                if isinstance(block, TextBlock):
-                    response_parts.append(block.text)
-
-    # Update metadata
-    metadata["last_used"] = datetime.now().isoformat()
-    metadata["message_count"] += 1
-
-    # Build response based on verbosity
-    result = {
-        "success": True,
-        "name": name,
-        "response": "\n".join(response_parts),
-    }
-
-    if session_id:
-        result["session_id"] = session_id
-
-    if fork:
-        result["forked"] = True
-
-    if verbosity == "verbose":
-        result["events"] = all_events
-
-    return result
+    except asyncio.TimeoutError:
+        return {
+            "success": False,
+            "error": f"Agent call timed out after {timeout} seconds",
+            "timeout": timeout
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Agent call failed: {str(e)}",
+            "error_type": type(e).__name__
+        }
 
 
 @mcp.tool
@@ -301,6 +338,7 @@ async def claudy_call(
     fork: bool = False,
     fork_name: Optional[str] = None,
     parent_session_id: Optional[str] = None,
+    timeout: int = 300,
 ) -> str:
     """Delegate a task to a persistent Claude agent session (blocking, waits for completion).
 
@@ -327,11 +365,12 @@ async def claudy_call(
         fork: Create independent copy of session to explore alternatives without affecting original
         fork_name: Name for forked session (auto-generated if omitted)
         parent_session_id: Advanced - explicit parent session to inherit from (auto-detected by default)
+        timeout: Maximum seconds to wait for agent response (default: 300 = 5 minutes)
 
     Returns:
         JSON with 'success', 'response', 'session_id', and optional 'events' (if verbose)
     """
-    result = await _execute_call(name, message, verbosity, fork, fork_name, parent_session_id)
+    result = await _execute_call(name, message, verbosity, fork, fork_name, parent_session_id, timeout)
 
     import json
     return json.dumps(result, indent=2, ensure_ascii=False)
@@ -343,6 +382,7 @@ async def claudy_call_async(
     message: str,
     verbosity: str = "normal",
     parent_session_id: Optional[str] = None,
+    timeout: int = 300,
 ) -> str:
     """Start agent task in background, returns immediately for parallel execution.
 
@@ -366,12 +406,13 @@ async def claudy_call_async(
         message: Task for the agent
         verbosity: Output detail level - 'quiet', 'normal', 'verbose'
         parent_session_id: Advanced - explicit parent session to inherit from
+        timeout: Maximum seconds to wait for agent response (default: 300 = 5 minutes)
 
     Returns:
         JSON with 'success', 'name', 'status': 'running'
     """
     # Create background task
-    task = asyncio.create_task(_execute_call(name, message, verbosity, parent_session_id=parent_session_id))
+    task = asyncio.create_task(_execute_call(name, message, verbosity, parent_session_id=parent_session_id, timeout=timeout))
     _background_tasks[name] = task
 
     import json
