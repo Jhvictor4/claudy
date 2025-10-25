@@ -1,0 +1,4 @@
+- you should implement festival.cpp, sovenirs.cpp, triple.cpp, worldmap.cpp according to the md files in [ioi](./ioi/) directory and template.
+- you can run test via `ioi-grade <file_name>`. file name must be one of the problems defined above.
+- write answers to /answers directory.
+- have 3 minutes of timeout for each cpp files. 
